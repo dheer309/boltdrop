@@ -1,4 +1,4 @@
-package main
+package chunker
 
 import (
 	"crypto/sha256"
@@ -21,15 +21,14 @@ type Manifest struct {
 	Chunks    []Chunk
 }
 
-func main() {
+func GenerateManifest(filepath string) (Manifest, error) {
 	var fourMB = 4 << 20 // 4 MB in go
 
 	// open the file and handle all errors
-	file, err := os.Open("testfile.bin")
+	file, err := os.Open(filepath)
 
 	if err != nil {
-		fmt.Println("Error related to file opening", err)
-		return
+		return Manifest{}, err
 	}
 	defer file.Close() // close file after doing all work
 
@@ -38,8 +37,7 @@ func main() {
 
 	// if error in grabbing file statistics
 	if err != nil {
-		fmt.Println("Error related to file stats", err)
-		return
+		return Manifest{}, err
 	}
 
 	// get file size
@@ -94,18 +92,12 @@ func main() {
 
 		// notify if error when reading the file
 		if err != nil {
-			fmt.Println("Error related to file reading", err)
-			return
+			return manifest, err
 		}
 
 		// update the new offset after reading and processing 4mb
 		offset += int64(n)
 	}
 
-	// print out the chunks from the manifest
-	for _, chunk := range manifest.Chunks {
-		fmt.Printf("Chunk %d: offset=%d size=%d hash=%s\n", chunk.Index, chunk.Offset, chunk.Size, chunk.Hash)
-	}
-
-	fmt.Printf("Total chunks: %d\n", len(manifest.Chunks))
+	return manifest, nil
 }
