@@ -16,6 +16,8 @@ func main() {
 		return
 	}
 
+	var fourMB = 4 << 20
+
 	// get file path from user
 	filename := os.Args[1]
 	// open the file
@@ -66,6 +68,29 @@ func main() {
 		return
 	}
 
-	// copy file to connection
-	io.Copy(conn, file)
+	// send the individual chunks one-by-one
+	buf := make([]byte, fourMB)
+
+	for _, chunk := range manifest.Chunks {
+		// move file cursor to chunk's starting position
+		file.Seek(chunk.Offset, 0)
+
+		// send chunk index
+		indexHeader := make([]byte, 8)
+		binary.BigEndian.PutUint64(indexHeader, uint64(chunk.Index))
+		conn.Write(indexHeader)
+
+		// send chunk size
+		sizeHeader := make([]byte, 8)
+		binary.BigEndian.PutUint64(sizeHeader, uint64(chunk.Size))
+		conn.Write(sizeHeader)
+
+		// send chunk data
+		n, _ := io.ReadFull(file, buf[:chunk.Size])
+		conn.Write(buf[:n])
+
+		fmt.Printf("Sent chunk %d\n", chunk.Index)
+	}
+
+	fmt.Println("Transfer complete")
 }
