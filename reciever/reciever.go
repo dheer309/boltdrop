@@ -5,11 +5,18 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"slices"
 )
+
+type ResumeState struct {
+	ResumeFileName  string
+	CompletedChunks []int
+}
 
 func main() {
 	// wait until another terminal connects to port 8000
@@ -77,6 +84,9 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
+	resumeFilePath := "." + manifest.Filename + ".resume"
+	resumeState := loadResumeState(resumeFilePath)
+
 	// send the actual file
 	file, err := os.OpenFile(manifest.Filename, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
@@ -102,6 +112,12 @@ func handleConnection(conn net.Conn) {
 		// read chunk data
 		n, _ := io.ReadFull(conn, bucket[:size])
 
+		// if that chunk is already in the resume file, then move on to next chunk
+		if slices.Contains(resumeState.CompletedChunks, int(index)) {
+			fmt.Printf("chunk %d already received, skipping\n", index)
+			continue
+		}
+
 		// create a new hash
 		h := sha256.New()
 		if n > 0 {
@@ -112,10 +128,63 @@ func handleConnection(conn net.Conn) {
 			// if hash is equal, then write changes, else discard
 			if manifest.Chunks[index].Hash == hashed {
 				file.WriteAt(bucket[:n], manifest.Chunks[index].Offset)
+
+				resumeState.CompletedChunks = append(resumeState.CompletedChunks, int(index))
+				resumeState.ResumeFileName = manifest.Filename
+				saveResumeState(resumeFilePath, resumeState)
+
 				fmt.Printf("chunk %d match, successful\n", index)
 			} else {
 				fmt.Printf("chunk %d hash mismatch, discarding\n", index)
 			}
 		}
 	}
+}
+
+func loadResumeState(resumeFilePath string) ResumeState {
+	// if file doesn't exist create a new resume state
+	if !checkFileExists(resumeFilePath) {
+		return ResumeState{}
+	}
+
+	// file exists, read it
+	data, err := os.ReadFile(resumeFilePath)
+
+	if err != nil {
+		fmt.Println("Coudln't read resume file")
+		return ResumeState{}
+	}
+
+	// save the resume state from the file
+	var state ResumeState
+	err = json.Unmarshal(data, &state)
+
+	if err != nil {
+		fmt.Println("Cannot convert into Manifest struct", err)
+		return ResumeState{}
+	}
+
+	return state
+}
+
+func saveResumeState(resumeFilePath string, state ResumeState) error {
+	// convert the ResumeState to json
+	stateJson, err := json.Marshal(state)
+
+	if err != nil {
+		fmt.Println("Error when converting state to JSON:", err)
+		return err
+	}
+
+	// write that json data to .resume
+	os.WriteFile(resumeFilePath, stateJson, 0644)
+
+	return nil // no errors
+}
+
+// a function which checks if the given file path exists
+func checkFileExists(filePath string) bool {
+	_, error := os.Stat(filePath)
+	//return !os.IsNotExist(err)
+	return !errors.Is(error, os.ErrNotExist)
 }
