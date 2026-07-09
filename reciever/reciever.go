@@ -86,7 +86,7 @@ func handleConnection(conn net.Conn) {
 
 	// save the resume file's path and the resume state from it
 	resumeFilePath := "." + manifest.Filename + ".resume"
-	resumeState := loadResumeState(resumeFilePath)
+	resumeState := loadResumeState(resumeFilePath, manifest.Filename)
 
 	// delete resume file after sending
 	defer func() {
@@ -118,7 +118,10 @@ func handleConnection(conn net.Conn) {
 	// a 4 mb bucket
 	bucket := make([]byte, fourMB)
 
-	for range manifest.Chunks {
+	// only loop for the quantity of chunks not yet processed
+	expectedChunks := len(manifest.Chunks) - len(resumeState.CompletedChunks)
+
+	for range expectedChunks {
 		// read chunk index
 		chunkIndex := make([]byte, 8)
 		_, err := io.ReadFull(conn, chunkIndex)
@@ -136,6 +139,12 @@ func handleConnection(conn net.Conn) {
 		chunkSize := make([]byte, 8)
 		io.ReadFull(conn, chunkSize)
 		size := binary.BigEndian.Uint64(chunkSize)
+
+		// unlikely to occur, rare edge case
+		if size > uint64(fourMB) {
+			fmt.Println("Chunk size exceeds buffer, aborting")
+			return
+		}
 
 		// read chunk data
 		n, _ := io.ReadFull(conn, bucket[:size])
@@ -171,7 +180,7 @@ func handleConnection(conn net.Conn) {
 	}
 }
 
-func loadResumeState(resumeFilePath string) ResumeState {
+func loadResumeState(resumeFilePath string, filename string) ResumeState {
 	// if file doesn't exist create a new resume state
 	if !checkFileExists(resumeFilePath) {
 		return ResumeState{}
@@ -191,6 +200,12 @@ func loadResumeState(resumeFilePath string) ResumeState {
 
 	if err != nil {
 		fmt.Println("Cannot convert into Manifest struct", err)
+		return ResumeState{}
+	}
+
+	// make sure the resume file is of the file being received
+	if state.ResumeFileName != filename {
+		fmt.Println("Resume file mismatch!")
 		return ResumeState{}
 	}
 
