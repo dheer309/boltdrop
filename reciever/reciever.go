@@ -84,8 +84,27 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
+	// save the resume file's path and the resume state from it
 	resumeFilePath := "." + manifest.Filename + ".resume"
 	resumeState := loadResumeState(resumeFilePath)
+
+	// delete resume file after sending
+	defer func() {
+		if len(resumeState.CompletedChunks) == len(manifest.Chunks) {
+			os.Remove(resumeFilePath)
+		}
+	}()
+
+	// convert the data about completed chunks to json, to send it to the sender
+	completedJson, _ := json.Marshal(resumeState.CompletedChunks)
+
+	// create a header and send its size
+	recievedChunks := make([]byte, 8) // header is 8 bytes long
+	binary.BigEndian.PutUint64(recievedChunks, uint64(len(completedJson)))
+	conn.Write(recievedChunks)
+
+	// send the completed chunks json data itself
+	conn.Write(completedJson)
 
 	// send the actual file
 	file, err := os.OpenFile(manifest.Filename, os.O_RDWR|os.O_CREATE, 0644)
@@ -96,12 +115,21 @@ func handleConnection(conn net.Conn) {
 
 	defer file.Close()
 
+	// a 4 mb bucket
 	bucket := make([]byte, fourMB)
 
 	for range manifest.Chunks {
 		// read chunk index
 		chunkIndex := make([]byte, 8)
-		io.ReadFull(conn, chunkIndex)
+		_, err := io.ReadFull(conn, chunkIndex)
+
+		// close connection after file transfer complete
+		if err != nil {
+			fmt.Println("Connection closed or err: ", err)
+			return
+		}
+
+		// convert chunk index to readable int
 		index := binary.BigEndian.Uint64(chunkIndex)
 
 		// read chunk size
@@ -112,8 +140,10 @@ func handleConnection(conn net.Conn) {
 		// read chunk data
 		n, _ := io.ReadFull(conn, bucket[:size])
 
-		// if that chunk is already in the resume file, then move on to next chunk
+		// NOTE: this is an edge case and may rarely run, as the sender itself skips
+		// sending the completed chunks
 		if slices.Contains(resumeState.CompletedChunks, int(index)) {
+			// if that chunk is already in the resume file, then move on to next chunk
 			fmt.Printf("chunk %d already received, skipping\n", index)
 			continue
 		}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 )
 
 func main() {
@@ -68,12 +69,48 @@ func main() {
 		return
 	}
 
+	// read the 8 byte header first
+	completedHeader := make([]byte, 8)
+	_, err = io.ReadFull(conn, completedHeader)
+
+	if err != nil {
+		fmt.Println("Cannot fetch completed chunk header", err)
+		return
+	}
+
+	// decode the completed chunk length from the header
+	completedChunkLength := binary.BigEndian.Uint64(completedHeader)
+
+	// reading only the completed chunk data
+	completedChunksJson := make([]byte, completedChunkLength)
+	_, err = io.ReadFull(conn, completedChunksJson)
+
+	if err != nil {
+		fmt.Println("Cannot fetch completed chunk data", err)
+		return
+	}
+
+	// converting the json back to int list
+	var completedChunks []int
+	err = json.Unmarshal(completedChunksJson, &completedChunks)
+
+	if err != nil {
+		fmt.Println("Cannot convert completed chunk data", err)
+		return
+	}
+
 	// send the individual chunks one-by-one
 	buf := make([]byte, fourMB)
 
 	for _, chunk := range manifest.Chunks {
 		// move file cursor to chunk's starting position
 		file.Seek(chunk.Offset, 0)
+
+		// skip sending chunk if already present in the receiver
+		if slices.Contains(completedChunks, chunk.Index) {
+			fmt.Printf("Chunk %d already received by the reciever, skip \n", chunk.Index)
+			continue
+		}
 
 		// send chunk index
 		indexHeader := make([]byte, 8)
