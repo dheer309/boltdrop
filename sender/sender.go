@@ -39,14 +39,6 @@ func main() {
 		return
 	}
 
-	// convert the manifest in JSON
-	manifestJson, err := json.Marshal(manifest)
-
-	if err != nil {
-		fmt.Println("Error when converting manifest to JSON:", err)
-		return
-	}
-
 	// try to connect to localhost thru tcp
 	conn, err := net.Dial("tcp", "localhost:8000")
 
@@ -55,6 +47,55 @@ func main() {
 		return
 	}
 	defer conn.Close()
+
+	// send the manifest to the receiver
+	if err = sendManifest(conn, manifest); err != nil {
+		return
+	}
+
+	// read data about which chunks are completed
+	completedChunks, err := readCompletedChunks(conn)
+
+	if err != nil {
+		return
+	}
+
+	// send the individual chunks one-by-one
+	buf := make([]byte, fourMB)
+
+	for _, chunk := range manifest.Chunks {
+		// move file cursor to chunk's starting position
+		_, err := file.Seek(chunk.Offset, 0)
+
+		if err != nil {
+			fmt.Println("Error moving cursor to chunk offset: ", err)
+			return
+		}
+
+		// skip sending chunk if already present in the receiver
+		if slices.Contains(completedChunks, chunk.Index) {
+			fmt.Printf("Chunk %d already received by the reciever, skip \n", chunk.Index)
+			continue
+		}
+
+		if err := sendChunk(conn, file, buf, chunk); err != nil {
+			return
+		}
+
+		fmt.Printf("Sent chunk %d\n", chunk.Index)
+	}
+
+	fmt.Println("Transfer complete")
+}
+
+func sendManifest(conn net.Conn, manifest chunker.Manifest) error {
+	// convert the manifest in JSON
+	manifestJson, err := json.Marshal(manifest)
+
+	if err != nil {
+		fmt.Println("Error when converting manifest to JSON:", err)
+		return err
+	}
 
 	// create a header and send the manifest's length through it
 	header := make([]byte, 8) // header is 8 bytes long
@@ -66,16 +107,21 @@ func main() {
 
 	if err != nil {
 		fmt.Printf("Error while sending manifest of %d bytes: %v", n, err)
-		return
+		return err
 	}
 
+	// no errors
+	return nil
+}
+
+func readCompletedChunks(conn net.Conn) ([]int, error) {
 	// read the 8 byte header first
 	completedHeader := make([]byte, 8)
-	_, err = io.ReadFull(conn, completedHeader)
+	_, err := io.ReadFull(conn, completedHeader)
 
 	if err != nil {
 		fmt.Println("Cannot fetch completed chunk header", err)
-		return
+		return nil, err
 	}
 
 	// decode the completed chunk length from the header
@@ -87,7 +133,7 @@ func main() {
 
 	if err != nil {
 		fmt.Println("Cannot fetch completed chunk data", err)
-		return
+		return nil, err
 	}
 
 	// converting the json back to int list
@@ -96,38 +142,37 @@ func main() {
 
 	if err != nil {
 		fmt.Println("Cannot convert completed chunk data", err)
-		return
+		return nil, err
 	}
 
-	// send the individual chunks one-by-one
-	buf := make([]byte, fourMB)
+	return completedChunks, nil
+}
 
-	for _, chunk := range manifest.Chunks {
-		// move file cursor to chunk's starting position
-		file.Seek(chunk.Offset, 0)
+func sendChunk(conn net.Conn, file *os.File, buf []byte, chunk chunker.Chunk) error {
+	// send chunk index
+	indexHeader := make([]byte, 8)
+	binary.BigEndian.PutUint64(indexHeader, uint64(chunk.Index))
+	conn.Write(indexHeader)
 
-		// skip sending chunk if already present in the receiver
-		if slices.Contains(completedChunks, chunk.Index) {
-			fmt.Printf("Chunk %d already received by the reciever, skip \n", chunk.Index)
-			continue
-		}
+	// send chunk size
+	sizeHeader := make([]byte, 8)
+	binary.BigEndian.PutUint64(sizeHeader, uint64(chunk.Size))
+	conn.Write(sizeHeader)
 
-		// send chunk index
-		indexHeader := make([]byte, 8)
-		binary.BigEndian.PutUint64(indexHeader, uint64(chunk.Index))
-		conn.Write(indexHeader)
+	// send chunk data
+	n, err := io.ReadFull(file, buf[:chunk.Size])
 
-		// send chunk size
-		sizeHeader := make([]byte, 8)
-		binary.BigEndian.PutUint64(sizeHeader, uint64(chunk.Size))
-		conn.Write(sizeHeader)
-
-		// send chunk data
-		n, _ := io.ReadFull(file, buf[:chunk.Size])
-		conn.Write(buf[:n])
-
-		fmt.Printf("Sent chunk %d\n", chunk.Index)
+	if err != nil {
+		fmt.Println("Error while reading chunk data")
+		return err
 	}
 
-	fmt.Println("Transfer complete")
+	_, err = conn.Write(buf[:n])
+
+	if err != nil {
+		fmt.Println("Error while sending chunk data")
+		return err
+	}
+
+	return nil
 }

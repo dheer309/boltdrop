@@ -18,6 +18,9 @@ type ResumeState struct {
 	CompletedChunks []int
 }
 
+// 4 mb
+var fourMB = 4 << 20
+
 func main() {
 	// wait until another terminal connects to port 8000
 	listener, err := net.Listen("tcp", ":8000")
@@ -47,40 +50,12 @@ func main() {
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
-	// 4 mb
-	var fourMB = 4 << 20
-
 	fmt.Println("New connection from ", conn.RemoteAddr())
 
-	// defining the header of being 8 bytes long
-	header := make([]byte, 8)
-
-	// reading only the first 8 bytes from the connection
-	_, err := io.ReadFull(conn, header)
+	// get the manifest data
+	manifest, err := readManifest(conn)
 
 	if err != nil {
-		fmt.Println("Cannot fetch header", err)
-		return
-	}
-
-	// fetching the manifest's actual length from the header
-	manifestLength := binary.BigEndian.Uint64(header)
-
-	// reading only the manifest
-	manifestJson := make([]byte, manifestLength)
-	_, err = io.ReadFull(conn, manifestJson)
-
-	if err != nil {
-		fmt.Println("Cannot fetch manifest", err)
-		return
-	}
-
-	// populating that json data into the manifest data structure
-	var manifest chunker.Manifest
-	err = json.Unmarshal(manifestJson, &manifest)
-
-	if err != nil {
-		fmt.Println("Cannot convert into Manifest struct", err)
 		return
 	}
 
@@ -95,16 +70,7 @@ func handleConnection(conn net.Conn) {
 		}
 	}()
 
-	// convert the data about completed chunks to json, to send it to the sender
-	completedJson, _ := json.Marshal(resumeState.CompletedChunks)
-
-	// create a header and send its size
-	recievedChunks := make([]byte, 8) // header is 8 bytes long
-	binary.BigEndian.PutUint64(recievedChunks, uint64(len(completedJson)))
-	conn.Write(recievedChunks)
-
-	// send the completed chunks json data itself
-	conn.Write(completedJson)
+	sendResumeState(conn, resumeState)
 
 	// send the actual file
 	file, err := os.OpenFile(manifest.Filename, os.O_RDWR|os.O_CREATE, 0644)
@@ -122,32 +88,12 @@ func handleConnection(conn net.Conn) {
 	expectedChunks := len(manifest.Chunks) - len(resumeState.CompletedChunks)
 
 	for range expectedChunks {
-		// read chunk index
-		chunkIndex := make([]byte, 8)
-		_, err := io.ReadFull(conn, chunkIndex)
+		index, n, err := receiveChunk(conn, bucket)
 
-		// close connection after file transfer complete
 		if err != nil {
-			fmt.Println("Connection closed or err: ", err)
+			fmt.Println("Error when reading chunk: ", err)
 			return
 		}
-
-		// convert chunk index to readable int
-		index := binary.BigEndian.Uint64(chunkIndex)
-
-		// read chunk size
-		chunkSize := make([]byte, 8)
-		io.ReadFull(conn, chunkSize)
-		size := binary.BigEndian.Uint64(chunkSize)
-
-		// unlikely to occur, rare edge case
-		if size > uint64(fourMB) {
-			fmt.Println("Chunk size exceeds buffer, aborting")
-			return
-		}
-
-		// read chunk data
-		n, _ := io.ReadFull(conn, bucket[:size])
 
 		// NOTE: this is an edge case and may rarely run, as the sender itself skips
 		// sending the completed chunks
@@ -157,27 +103,131 @@ func handleConnection(conn net.Conn) {
 			continue
 		}
 
-		// create a new hash
-		h := sha256.New()
-		if n > 0 {
-			// write chunk data into the hasher
-			h.Write(bucket[:n])
-			hashed := fmt.Sprintf("%x", h.Sum(nil))
+		ok := verifyChunk(manifest, index, n, bucket)
 
-			// if hash is equal, then write changes, else discard
-			if manifest.Chunks[index].Hash == hashed {
-				file.WriteAt(bucket[:n], manifest.Chunks[index].Offset)
+		if ok {
+			file.WriteAt(bucket[:n], manifest.Chunks[index].Offset)
 
-				resumeState.CompletedChunks = append(resumeState.CompletedChunks, int(index))
-				resumeState.ResumeFileName = manifest.Filename
-				saveResumeState(resumeFilePath, resumeState)
+			resumeState.CompletedChunks = append(resumeState.CompletedChunks, int(index))
+			resumeState.ResumeFileName = manifest.Filename
+			saveResumeState(resumeFilePath, resumeState)
 
-				fmt.Printf("chunk %d match, successful\n", index)
-			} else {
-				fmt.Printf("chunk %d hash mismatch, discarding\n", index)
-			}
+			fmt.Printf("chunk %d match, successful\n", index)
+		} else {
+			fmt.Printf("chunk %d hash mismatch, discarding\n", index)
 		}
 	}
+}
+
+func readManifest(conn net.Conn) (chunker.Manifest, error) {
+	// defining the header of being 8 bytes long
+	header := make([]byte, 8)
+
+	// reading only the first 8 bytes from the connection
+	_, err := io.ReadFull(conn, header)
+
+	if err != nil {
+		fmt.Println("Cannot fetch header", err)
+		return chunker.Manifest{}, err
+	}
+
+	// fetching the manifest's actual length from the header
+	manifestLength := binary.BigEndian.Uint64(header)
+
+	// reading only the manifest
+	manifestJson := make([]byte, manifestLength)
+	_, err = io.ReadFull(conn, manifestJson)
+
+	if err != nil {
+		fmt.Println("Cannot fetch manifest", err)
+		return chunker.Manifest{}, err
+	}
+
+	// populating that json data into the manifest data structure
+	var manifest chunker.Manifest
+	err = json.Unmarshal(manifestJson, &manifest)
+
+	if err != nil {
+		fmt.Println("Cannot convert into Manifest struct", err)
+		return chunker.Manifest{}, err
+	}
+
+	// returning the manifest as there are no errors anymore
+	return manifest, nil
+}
+
+func receiveChunk(conn net.Conn, bucket []byte) (index uint64, n int, err error) {
+	// read chunk index
+	chunkIndex := make([]byte, 8)
+	_, err = io.ReadFull(conn, chunkIndex)
+
+	// close connection after file transfer complete
+	if err != nil {
+		fmt.Println("Connection closed or err: ", err)
+		return
+	}
+
+	// convert chunk index to readable int
+	index = binary.BigEndian.Uint64(chunkIndex)
+
+	// read chunk size
+	chunkSize := make([]byte, 8)
+	_, err = io.ReadFull(conn, chunkSize)
+
+	if err != nil {
+		fmt.Println("Error reading chunk size: ", err)
+		return
+	}
+
+	size := binary.BigEndian.Uint64(chunkSize)
+
+	// unlikely to occur, rare edge case
+	if size > uint64(fourMB) {
+		fmt.Println("Chunk size exceeds buffer, aborting")
+		return
+	}
+
+	// read chunk data
+	n, err = io.ReadFull(conn, bucket[:size])
+
+	if err != nil {
+		fmt.Println("Error reading chunk data: ", err)
+		return
+	}
+
+	// return the index and number of bytes
+	return index, n, err
+}
+
+func verifyChunk(manifest chunker.Manifest, index uint64, n int, bucket []byte) bool {
+	// create a new hash
+	h := sha256.New()
+
+	// write chunk data into the hasher
+	h.Write(bucket[:n])
+	hashed := fmt.Sprintf("%x", h.Sum(nil))
+
+	// if hash is equal, then write changes, else discard
+	if manifest.Chunks[index].Hash == hashed {
+		return true
+	} else {
+		return false
+	}
+}
+
+func sendResumeState(conn net.Conn, state ResumeState) error {
+	// convert the data about completed chunks to json, to send it to the sender
+	completedJson, _ := json.Marshal(state.CompletedChunks)
+
+	// create a header and send its size
+	recievedChunks := make([]byte, 8) // header is 8 bytes long
+	binary.BigEndian.PutUint64(recievedChunks, uint64(len(completedJson)))
+	conn.Write(recievedChunks)
+
+	// send the completed chunks json data itself
+	conn.Write(completedJson)
+
+	return nil
 }
 
 func loadResumeState(resumeFilePath string, filename string) ResumeState {
