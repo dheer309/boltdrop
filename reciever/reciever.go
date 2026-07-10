@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/grandcat/zeroconf"
 	"io"
 	"net"
 	"os"
@@ -22,6 +23,13 @@ type ResumeState struct {
 var fourMB = 4 << 20
 
 func main() {
+	// broadcast receiver's ip to anyone looking for boltdrop
+	server, err := zeroconf.Register("boltdrop", "_boltdrop._tcp", "local.", 8000, nil, nil)
+	if err != nil {
+		panic(err)
+	}
+	defer server.Shutdown()
+
 	// wait until another terminal connects to port 8000
 	listener, err := net.Listen("tcp", ":8000")
 

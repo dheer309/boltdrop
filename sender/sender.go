@@ -2,13 +2,17 @@ package main
 
 import (
 	"boltdrop/chunker"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/grandcat/zeroconf"
 	"io"
 	"net"
 	"os"
 	"slices"
+	"sync"
+	"time"
 )
 
 func main() {
@@ -39,8 +43,74 @@ func main() {
 		return
 	}
 
-	// try to connect to localhost thru tcp
-	conn, err := net.Dial("tcp", "localhost:8000")
+	// Discover all services on the network (_boltdrop._tcp)
+	resolver, err := zeroconf.NewResolver(nil)
+
+	if err != nil {
+		fmt.Println("Failed to initialize resolver:", err.Error())
+		return
+	}
+
+	// fetch all the ip addresses connected to boltdrop
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	entries := make(chan *zeroconf.ServiceEntry)
+	var found []*zeroconf.ServiceEntry
+
+	go func(results <-chan *zeroconf.ServiceEntry) {
+		defer wg.Done()
+		for entry := range results {
+			found = append(found, entry)
+		}
+	}(entries)
+
+	// stop searching for ip addresses after 10 seconds
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	// start browsing for ip address entries
+	err = resolver.Browse(ctx, "_boltdrop._tcp", "local.", entries)
+
+	if err != nil {
+		fmt.Println("Failed to browse:", err.Error())
+		return
+	}
+
+	// wait till we are finally done
+	<-ctx.Done()
+	wg.Wait()
+
+	// no recievers are found
+	if len(found) == 0 {
+		fmt.Println("No receivers found, quitting")
+		return
+	}
+
+	// list all the ip addresses found
+	for i, entry := range found {
+		fmt.Printf("%d: %s:%d\n", i+1, entry.AddrIPv4[0], entry.Port)
+	}
+
+	// let user select which ip address to send the file to
+	var choice int
+
+	for {
+		fmt.Printf("Select receiver between 1 to %d\n", len(found))
+		fmt.Scan(&choice)
+
+		if choice >= 1 && choice <= len(found) {
+			break
+		}
+
+		fmt.Println("Invalid choice, try again!")
+	}
+
+	entry := found[choice-1]
+	addr := net.JoinHostPort(entry.AddrIPv4[0].String(), fmt.Sprintf("%d", entry.Port))
+
+	// try to connect to selected address through tcp
+	conn, err := net.Dial("tcp", addr)
 
 	if err != nil {
 		fmt.Println("Error: ", err)
