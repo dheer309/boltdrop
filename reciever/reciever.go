@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/grandcat/zeroconf"
 	"io"
 	"net"
 	"os"
 	"slices"
+
+	"github.com/grandcat/zeroconf"
+	"github.com/schollz/progressbar/v3"
 )
 
 type ResumeState struct {
@@ -92,6 +94,13 @@ func handleConnection(conn net.Conn) {
 	// a 4 mb bucket
 	bucket := make([]byte, fourMB)
 
+	// calculate remaining size
+	alreadyReceived := int64(len(resumeState.CompletedChunks)) * int64(manifest.ChunkSize)
+	remainingSize := manifest.FileSize - alreadyReceived
+
+	// initialise progress bar
+	bar := progressbar.DefaultBytes(remainingSize, "receiving file")
+
 	// only loop for the quantity of chunks not yet processed
 	expectedChunks := len(manifest.Chunks) - len(resumeState.CompletedChunks)
 
@@ -107,7 +116,7 @@ func handleConnection(conn net.Conn) {
 		// sending the completed chunks
 		if slices.Contains(resumeState.CompletedChunks, int(index)) {
 			// if that chunk is already in the resume file, then move on to next chunk
-			fmt.Printf("chunk %d already received, skipping\n", index)
+			//fmt.Printf("chunk %d already received, skipping\n", index)
 			continue
 		}
 
@@ -116,15 +125,20 @@ func handleConnection(conn net.Conn) {
 		if ok {
 			file.WriteAt(bucket[:n], manifest.Chunks[index].Offset)
 
+			// update progress bar
+			bar.Add(n)
+
 			resumeState.CompletedChunks = append(resumeState.CompletedChunks, int(index))
 			resumeState.ResumeFileName = manifest.Filename
 			saveResumeState(resumeFilePath, resumeState)
 
-			fmt.Printf("chunk %d match, successful\n", index)
+			//fmt.Printf("chunk %d match, successful\n", index)
 		} else {
-			fmt.Printf("chunk %d hash mismatch, discarding\n", index)
+			//fmt.Printf("chunk %d hash mismatch, discarding\n", index)
 		}
 	}
+
+	fmt.Println("\nFile received")
 }
 
 func readManifest(conn net.Conn) (chunker.Manifest, error) {

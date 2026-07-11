@@ -6,13 +6,15 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/grandcat/zeroconf"
 	"io"
 	"net"
 	"os"
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/grandcat/zeroconf"
+	"github.com/schollz/progressbar/v3"
 )
 
 func main() {
@@ -54,6 +56,8 @@ func main() {
 	// fetch all the ip addresses connected to boltdrop
 	var wg sync.WaitGroup
 	wg.Add(1)
+
+	fmt.Println("Searching receiver devices...")
 
 	entries := make(chan *zeroconf.ServiceEntry)
 	var found []*zeroconf.ServiceEntry
@@ -130,6 +134,17 @@ func main() {
 		return
 	}
 
+	// calculating how many bytes to skip
+	var skippedBytes int64
+	for _, chunk := range manifest.Chunks {
+		if slices.Contains(completedChunks, chunk.Index) {
+			skippedBytes += int64(chunk.Size)
+		}
+	}
+
+	// initialise progress bar
+	bar := progressbar.DefaultBytes(manifest.FileSize-skippedBytes, "sending file")
+
 	// send the individual chunks one-by-one
 	buf := make([]byte, fourMB)
 
@@ -144,18 +159,18 @@ func main() {
 
 		// skip sending chunk if already present in the receiver
 		if slices.Contains(completedChunks, chunk.Index) {
-			fmt.Printf("Chunk %d already received by the reciever, skip \n", chunk.Index)
+			//			fmt.Printf("Chunk %d already received by the reciever, skip \n", chunk.Index)
 			continue
 		}
 
-		if err := sendChunk(conn, file, buf, chunk); err != nil {
+		if err := sendChunk(conn, file, buf, chunk, bar); err != nil {
 			return
 		}
 
-		fmt.Printf("Sent chunk %d\n", chunk.Index)
+		//		fmt.Printf("Sent chunk %d\n", chunk.Index)
 	}
 
-	fmt.Println("Transfer complete")
+	fmt.Println("\nTransfer complete")
 }
 
 func sendManifest(conn net.Conn, manifest chunker.Manifest) error {
@@ -218,7 +233,7 @@ func readCompletedChunks(conn net.Conn) ([]int, error) {
 	return completedChunks, nil
 }
 
-func sendChunk(conn net.Conn, file *os.File, buf []byte, chunk chunker.Chunk) error {
+func sendChunk(conn net.Conn, file *os.File, buf []byte, chunk chunker.Chunk, bar *progressbar.ProgressBar) error {
 	// send chunk index
 	indexHeader := make([]byte, 8)
 	binary.BigEndian.PutUint64(indexHeader, uint64(chunk.Index))
@@ -243,6 +258,9 @@ func sendChunk(conn net.Conn, file *os.File, buf []byte, chunk chunker.Chunk) er
 		fmt.Println("Error while sending chunk data")
 		return err
 	}
+
+	// update progress bar
+	bar.Add(n)
 
 	return nil
 }
