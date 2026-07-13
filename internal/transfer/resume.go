@@ -48,7 +48,7 @@ func LoadResumeState(resumeFilePath string, filename string) ResumeState {
 	err = json.Unmarshal(data, &state)
 
 	if err != nil {
-		fmt.Println("Cannot convert into Manifest struct", err)
+		fmt.Println("Cannot convert into ResumeState struct", err)
 		return ResumeState{}
 	}
 
