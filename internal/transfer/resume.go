@@ -14,17 +14,22 @@ type ResumeState struct {
 	CompletedChunks []int
 }
 
-func SendResumeState(conn net.Conn, state ResumeState) error {
-	// convert the data about completed chunks to json, to send it to the sender
-	completedJson, _ := json.Marshal(state.CompletedChunks)
+func SendResumeState(conn net.Conn, state ResumeState, totalChunks int) error {
+	// make a bitmask with the appropriate length
+	bitmask := make([]byte, (totalChunks+7)/8)
+
+	// mark chunk as complete: byte index = chunkIndex/8, bit position = chunkIndex%8
+	for _, chunkIndex := range state.CompletedChunks {
+		bitmask[chunkIndex/8] |= 1 << (chunkIndex % 8)
+	}
 
 	// create a header and send its size
 	recievedChunks := make([]byte, 8) // header is 8 bytes long
-	binary.BigEndian.PutUint64(recievedChunks, uint64(len(completedJson)))
+	binary.BigEndian.PutUint64(recievedChunks, uint64(len(bitmask)))
 	conn.Write(recievedChunks)
 
-	// send the completed chunks json data itself
-	conn.Write(completedJson)
+	// send the bitmask
+	conn.Write(bitmask)
 
 	return nil
 }

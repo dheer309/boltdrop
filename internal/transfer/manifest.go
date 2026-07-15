@@ -86,8 +86,8 @@ func ReadCompletedChunks(conn net.Conn) ([]int, error) {
 	completedChunkLength := binary.BigEndian.Uint64(completedHeader)
 
 	// reading only the completed chunk data
-	completedChunksJson := make([]byte, completedChunkLength)
-	_, err = io.ReadFull(conn, completedChunksJson)
+	bitmask := make([]byte, completedChunkLength)
+	_, err = io.ReadFull(conn, bitmask)
 
 	if err != nil {
 		fmt.Println("Cannot fetch completed chunk data", err)
@@ -96,11 +96,14 @@ func ReadCompletedChunks(conn net.Conn) ([]int, error) {
 
 	// converting the json back to int list
 	var completedChunks []int
-	err = json.Unmarshal(completedChunksJson, &completedChunks)
 
-	if err != nil {
-		fmt.Println("Cannot convert completed chunk data", err)
-		return nil, err
+	// for every byte, loop through every bit to determine which chunk is received already
+	for byteIndex, b := range bitmask {
+		for bitPos := range 8 {
+			if b&(1<<bitPos) != 0 {
+				completedChunks = append(completedChunks, byteIndex*8+bitPos)
+			}
+		}
 	}
 
 	return completedChunks, nil

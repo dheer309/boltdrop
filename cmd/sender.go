@@ -52,12 +52,17 @@ func sendFile(cmd *cobra.Command, args []string) {
 
 	fmt.Println("Searching receiver devices...")
 
+	start := time.Now()
+
 	entries := make(chan *zeroconf.ServiceEntry)
 	var found []*zeroconf.ServiceEntry
 
 	go func(results <-chan *zeroconf.ServiceEntry) {
 		defer wg.Done()
 		for entry := range results {
+			if len(found) == 0 {
+				fmt.Printf("First device found in: %v\n", time.Since(start))
+			}
 			found = append(found, entry)
 		}
 	}(entries)
@@ -114,6 +119,10 @@ func sendFile(cmd *cobra.Command, args []string) {
 		return
 	}
 	defer conn.Close()
+
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetWriteBuffer(1024 * 1024)
+	}
 
 	// send the manifest to the receiver
 	if err = transfer.SendManifest(conn, manifest); err != nil {

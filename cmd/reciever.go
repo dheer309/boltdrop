@@ -36,6 +36,10 @@ func receiveFile(cmd *cobra.Command, args []string) {
 		// accept connection
 		conn, err := listener.Accept()
 
+		if tcpConn, ok := conn.(*net.TCPConn); ok {
+			tcpConn.SetReadBuffer(1024 * 1024)
+		}
+
 		if err != nil {
 			fmt.Println("Error: ", err)
 		}
@@ -68,7 +72,7 @@ func handleConnection(conn net.Conn) {
 		}
 	}()
 
-	transfer.SendResumeState(conn, resumeState)
+	transfer.SendResumeState(conn, resumeState, len(manifest.Chunks))
 
 	// send the actual file
 	file, err := os.OpenFile(manifest.Filename, os.O_RDWR|os.O_CREATE, 0644)
