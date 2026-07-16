@@ -1,10 +1,10 @@
 package main
 
 import (
-	"boltdrop/chunker"
-	"boltdrop/internal/transfer"
 	"context"
 	"fmt"
+	"github.com/dheer309/boltdrop/chunker"
+	"github.com/dheer309/boltdrop/internal/transfer"
 	"net"
 	"os"
 	"slices"

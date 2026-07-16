@@ -1,10 +1,10 @@
 package transfer
 
 import (
-	"boltdrop/chunker"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/dheer309/boltdrop/chunker"
 	"io"
 	"net"
 )

@@ -1,10 +1,10 @@
 package transfer
 
 import (
-	"boltdrop/internal/utils"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/dheer309/boltdrop/internal/utils"
 	"net"
 	"os"
 )
@@ -53,7 +53,7 @@ func LoadResumeState(resumeFilePath string, filename string) ResumeState {
 	err = json.Unmarshal(data, &state)
 
 	if err != nil {
-		fmt.Println("Cannot convert into ResumeState struct", err)
+		fmt.Println("Cannot convert into Manifest struct", err)
 		return ResumeState{}
 	}
 

@@ -1,4 +1,4 @@
-module boltdrop
+module github.com/dheer309/boltdrop
 
 go 1.26.2
 

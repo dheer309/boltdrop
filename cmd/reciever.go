@@ -1,8 +1,8 @@
 package main
 
 import (
-	"boltdrop/internal/transfer"
 	"fmt"
+	"github.com/dheer309/boltdrop/internal/transfer"
 	"net"
 	"os"
 	"slices"

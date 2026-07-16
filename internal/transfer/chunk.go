@@ -1,10 +1,10 @@
 package transfer
 
 import (
-	"boltdrop/chunker"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"github.com/dheer309/boltdrop/chunker"
 	"github.com/schollz/progressbar/v3"
 	"io"
 	"net"
